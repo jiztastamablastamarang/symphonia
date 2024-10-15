@@ -1,4 +1,4 @@
-//! SILK decoder implementation.
+//! SILK decoder implementation (symphonia crate).
 //!
 //! The decoder's LP layer uses a modified version of the SILK codec
 //! (herein simply called "SILK"), which runs a decoded excitation signal
@@ -51,7 +51,7 @@ use std::convert::TryFrom;
 use crate::entropy::{self, RangeDecoder};
 use crate::packet::FramePacket;
 use crate::silk::error::Error;
-use crate::toc::{Bandwidth, FrameSize};
+use crate::toc::{Bandwidth, FrameDuration};
 use crate::silk::constant;
 
 use symphonia_core::audio::{AsAudioBufferRef, AudioBuffer, AudioBufferRef, Channels, Signal, SignalSpec};
@@ -140,7 +140,7 @@ use symphonia_core::io::{BitReaderLtr, FiniteBitStream, ReadBitsLtr};
 ///    - **Pitch Parameters:** Include primary pitch lag and subframe pitch contours for voiced frames.
 ///    - **LTP (Long-Term Prediction) Parameters:** Enhance the coding of periodic signals.
 ///    - **Excitation Parameters:** Define the excitation signal's characteristics, crucial for synthesizing the speech signal.
-/// 
+///
 /// This structure reflects the complex and variable nature of SILK frames
 /// as described in RFC 6716, Section 4.2.7.
 ///
@@ -184,10 +184,8 @@ impl Decoder {
     pub fn decode(&mut self, packet: &Packet) -> Result<AudioBufferRef<'_>> {
         let frame_packet = FramePacket::new(&packet.data)?;
 
-        let params = frame_packet.toc.params().map_err(|_| Error::UnsupportedConfig)?;
-
-        if self.state.frame_size != params.frame_size || self.state.bandwidth != params.bandwidth || self.state.channels != self.channels {
-            self.state = State::try_new(self.channels, params.frame_size, params.bandwidth)?;
+        if self.state.frame_size != frame_packet.frame_size || self.state.bandwidth != frame_packet.bandwidth || self.state.channels != self.channels {
+            self.state = State::try_new(self.channels, frame_packet.frame_size, frame_packet.bandwidth)?;
         }
 
         for frame_data in frame_packet.frames.iter() {
@@ -269,7 +267,7 @@ impl Decoder {
 
         self.decode_lsf(&mut range_decoder, &mut frame)?;
 
-        if self.state.frame_size == FrameSize::Ms20 {
+        if self.state.frame_size == FrameDuration::Ms20 {
             frame.lsf_interpolation_index = Some(range_decoder.decode_symbol_with_icdf(&constant::ICDF_NORMALIZED_LSF_INTERPOLATION_INDEX)?);
         }
 
@@ -296,7 +294,7 @@ impl Decoder {
         return Ok((vad_flag, lbrr_flag));
     }
 
-    
+
     /// Decodes the SILK frame type
     ///
     /// The frame type is encoded using a context-dependent codebook.
@@ -335,7 +333,7 @@ impl Decoder {
             subframe.nlsf_q15 = stabilized_nlsf_q15;
         }
 
-        if self.state.frame_size == FrameSize::Ms20 {
+        if self.state.frame_size == FrameDuration::Ms20 {
             let interpolation_index = decoder.decode_symbol_with_icdf(&constant::ICDF_NORMALIZED_LSF_INTERPOLATION_INDEX)?;
             frame.lsf_interpolation_index = Some(interpolation_index);
 
@@ -921,7 +919,7 @@ impl Decoder {
 pub struct State {
     sample_rate: u32,
     channels: Channels,
-    frame_size: FrameSize,
+    frame_size: FrameDuration,
     bandwidth: Bandwidth,
     prev_frame_type: FrameType,
     prev_samples: Vec<f32>,
@@ -931,7 +929,7 @@ pub struct State {
 
 
 impl State {
-    pub fn try_new(channels: Channels, frame_size: FrameSize, bandwidth: Bandwidth) -> Result<Self> {
+    pub fn try_new(channels: Channels, frame_size: FrameDuration, bandwidth: Bandwidth) -> Result<Self> {
         let sample_rate = bandwidth.sample_rate();
         let frame_length = Self::calculate_frame_length(sample_rate, frame_size)?;
         let channel_count = channels.count();
@@ -957,7 +955,7 @@ impl State {
         self.prev_samples.fill(0.0);
     }
 
-    fn calculate_frame_length(sample_rate: u32, frame_size: FrameSize) -> Result<usize> {
+    fn calculate_frame_length(sample_rate: u32, frame_size: FrameDuration) -> Result<usize> {
         let samples = (sample_rate as u128)
             .checked_mul(frame_size.duration().as_nanos())
             .and_then(|ns| ns.checked_div(1_000_000_000))
@@ -1063,8 +1061,8 @@ pub enum QuantizationOffsetType {
 ///
 /// https://datatracker.ietf.org/doc/html/rfc6716#section-4.2.7.9
 type SubframeSize = usize;
-impl From<FrameSize> for SubframeSize {
-     /// Converts a FrameSize to the number of subframes it contains
+impl From<FrameDuration> for SubframeSize {
+    /// Converts a FrameSize to the number of subframes it contains
     ///
     /// The number of subframes varies based on the frame duration:
     /// - 2.5 ms and 5 ms frames have 1 subframe
@@ -1072,14 +1070,14 @@ impl From<FrameSize> for SubframeSize {
     /// - 20 ms frames have 4 subframes
     /// - 40 ms frames have 8 subframes
     /// - 60 ms frames have 12 subframes
-    fn from(frame_size: FrameSize) -> Self {
+    fn from(frame_size: FrameDuration) -> Self {
         return match frame_size {
-            FrameSize::Ms2_5 => 1,
-            FrameSize::Ms5 => 1,
-            FrameSize::Ms10 => 2,
-            FrameSize::Ms20 => 4,
-            FrameSize::Ms40 => 8,
-            FrameSize::Ms60 => 12,
+            FrameDuration::Ms2_5 => 1,
+            FrameDuration::Ms5 => 1,
+            FrameDuration::Ms10 => 2,
+            FrameDuration::Ms20 => 4,
+            FrameDuration::Ms40 => 8,
+            FrameDuration::Ms60 => 12,
         };
     }
 }
