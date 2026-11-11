@@ -15,6 +15,7 @@ use symphonia_common::mpeg::video::{
     AVCDecoderConfigurationRecord, HEVCDecoderConfigurationRecord,
 };
 use symphonia_common::xiph::audio::flac::{MetadataBlockHeader, MetadataBlockType, StreamInfo};
+use symphonia_common::xiph::audio::opus::OpusHead;
 use symphonia_core::audio::Channels;
 use symphonia_core::audio::sample::SampleFormat;
 use symphonia_core::codecs::audio::AudioCodecParameters;
@@ -89,6 +90,10 @@ fn make_audio_codec_params(
         let extra_data = match id {
             CODEC_ID_VORBIS => vorbis_extra_data_from_codec_private(&codec_private)?,
             CODEC_ID_FLAC => flac_extra_data_from_codec_private(&codec_private)?,
+            CODEC_ID_OPUS => {
+                codec_params.with_channels(opus_channels_from_codec_private(&codec_private)?);
+                codec_private
+            }
             _ => codec_private,
         };
 
@@ -218,6 +223,17 @@ fn vorbis_extra_data_from_codec_private(extra: &[u8]) -> Result<Box<[u8]>> {
     ]
     .concat()
     .into_boxed_slice())
+}
+
+/// The channel layout of an Opus track from the `OpusHead` identification header carried in its
+/// codec private data; the track header itself only states a channel count.
+fn opus_channels_from_codec_private(codec_private: &[u8]) -> Result<Channels> {
+    // Matroska carries the Ogg Opus identification header verbatim, so the same versions as the
+    // Ogg mapping are accepted (RFC 7845, Section 5.1).
+    const OPUS_HEAD_MAX_VERSION: u8 = 0x0f;
+
+    let opus_head = OpusHead::read(&mut BufReader::new(codec_private), OPUS_HEAD_MAX_VERSION)?;
+    Ok(opus_head.channels)
 }
 
 fn flac_extra_data_from_codec_private(codec_private: &[u8]) -> Result<Box<[u8]>> {
